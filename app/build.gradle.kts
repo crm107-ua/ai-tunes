@@ -9,6 +9,9 @@ android {
     namespace = "com.aitunes.app"
     compileSdk = 36
 
+    // Si sigues viendo aviso 16 KB en libc++_shared: SDK Manager → instala NDK r27+ y pon aquí esa versión.
+    ndkVersion = "26.1.10909125"
+
     defaultConfig {
         applicationId = "com.aitunes.app"
         minSdk = 26
@@ -17,6 +20,31 @@ android {
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        ndk {
+            // Con -PemuAbiOnly=true solo se empaqueta x86_64: APK mucho mas pequeno (instalacion en emulador).
+            if (project.findProperty("emuAbiOnly") == "true") {
+                abiFilters += "x86_64"
+            } else {
+                abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")
+            }
+        }
+
+        externalNativeBuild {
+            cmake {
+                arguments += listOf(
+                    "-DANDROID_STL=c++_shared",
+                    "-DGGML_NEON=ON"
+                )
+                cppFlags += listOf("-O3", "-fPIC")
+            }
+        }
+    }
+
+    packaging {
+        jniLibs {
+            useLegacyPackaging = false
+        }
     }
 
     buildTypes {
@@ -37,6 +65,13 @@ android {
     buildFeatures {
         compose = true
     }
+
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
+    }
 }
 
 kotlin {
@@ -46,11 +81,16 @@ kotlin {
 }
 
 dependencies {
+    // Inferencia GGUF nativa (Maven): la coordenada solicitada no está publicada en Central.
+    // Cuando dispongas de AAR/JNI, descomenta o sustituye por tu artefacto:
+    // implementation("io.github.paddlepaddle:llama-android:0.1.0")
+
     // Core
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
+    implementation(libs.androidx.lifecycle.viewmodel.ktx)
     implementation(libs.androidx.activity.compose)
 
     // Compose BOM
@@ -86,4 +126,13 @@ dependencies {
     androidTestImplementation(libs.androidx.ui.test.junit4)
     debugImplementation(libs.androidx.ui.tooling)
     debugImplementation(libs.androidx.ui.test.manifest)
+}
+
+// Gradle 8.9 + Windows: "Cannot access output property 'resultsDir'" / fallo MD5 en reports de tests instrumentados.
+afterEvaluate {
+    tasks.named("connectedDebugAndroidTest").configure {
+        doNotTrackState(
+            "Salida de connectedAndroidTest no siempre legible para el tracker incremental (AV/OneDrive/rutas)."
+        )
+    }
 }

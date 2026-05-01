@@ -117,7 +117,10 @@ private val assistants = listOf(
 )
 
 @Composable
-fun HomeScreen(onAssistantClick: (AiAssistant) -> Unit = {}) {
+fun HomeScreen(
+    onAssistantClick: (AiAssistant) -> Unit = {},
+    onOpenModelLibrary: () -> Unit = {}
+) {
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -161,7 +164,8 @@ fun HomeScreen(onAssistantClick: (AiAssistant) -> Unit = {}) {
         BottomNavBar(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
-                .navigationBarsPadding()
+                .navigationBarsPadding(),
+            onOpenModelLibrary = onOpenModelLibrary
         )
     }
 }
@@ -365,7 +369,10 @@ private data class NavTab(
 )
 
 @Composable
-private fun BottomNavBar(modifier: Modifier = Modifier) {
+private fun BottomNavBar(
+    modifier: Modifier = Modifier,
+    onOpenModelLibrary: () -> Unit = {}
+) {
     var selected by remember { mutableIntStateOf(0) }
 
     val tabs = listOf(
@@ -430,7 +437,10 @@ private fun BottomNavBar(modifier: Modifier = Modifier) {
                             icon = tab.icon,
                             label = tab.label,
                             isSelected = selected == index,
-                            onClick = { selected = index }
+                            onClick = {
+                                selected = index
+                                if (index == 1) onOpenModelLibrary()
+                            }
                         )
                     }
                 }

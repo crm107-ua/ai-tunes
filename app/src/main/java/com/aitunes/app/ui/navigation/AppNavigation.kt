@@ -1,12 +1,21 @@
 package com.aitunes.app.ui.navigation
 
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import com.aitunes.app.AiTunesApplication
 import com.aitunes.app.domain.model.AiAssistant
+import com.aitunes.app.domain.model.SectorId
+import com.aitunes.app.ui.chat.ChatViewModel
+import com.aitunes.app.ui.chat.ChatViewModelFactory
+import com.aitunes.app.ui.models.ModelLibraryScreen
+import com.aitunes.app.ui.models.ModelLibraryViewModel
+import com.aitunes.app.ui.models.ModelLibraryViewModelFactory
 import com.aitunes.app.ui.screens.ChatScreen
 import com.aitunes.app.ui.screens.HomeScreen
 import com.aitunes.app.ui.theme.CreativePurple
@@ -64,6 +73,7 @@ private val assistants = mapOf(
 @Composable
 fun AppNavigation() {
     val navController = rememberNavController()
+    val app = LocalContext.current.applicationContext as AiTunesApplication
     NavHost(
         navController = navController,
         startDestination = "home"
@@ -72,7 +82,17 @@ fun AppNavigation() {
             HomeScreen(
                 onAssistantClick = { assistant ->
                     navController.navigate("chat/${assistant.id}")
-                }
+                },
+                onOpenModelLibrary = { navController.navigate("models") }
+            )
+        }
+        composable("models") {
+            val modelVm = viewModel<ModelLibraryViewModel>(
+                factory = ModelLibraryViewModelFactory(app)
+            )
+            ModelLibraryScreen(
+                viewModel = modelVm,
+                onBack = { navController.popBackStack() }
             )
         }
         composable(
@@ -81,9 +101,19 @@ fun AppNavigation() {
         ) { backStackEntry ->
             val assistantId = backStackEntry.arguments?.getString("assistantId") ?: "health"
             val assistant = assistants[assistantId] ?: assistants["health"]!!
+            val sector = SectorId.fromAssistantId(assistantId)
+            val chatVm = viewModel<ChatViewModel>(
+                key = assistantId,
+                factory = ChatViewModelFactory(app, sector)
+            )
             ChatScreen(
                 assistant = assistant,
-                onBackClick = { navController.popBackStack() }
+                viewModel = chatVm,
+                onBackClick = { navController.popBackStack() },
+                onOpenModelLibrary = {
+                    chatVm.refreshModelRequirement()
+                    navController.navigate("models")
+                }
             )
         }
     }

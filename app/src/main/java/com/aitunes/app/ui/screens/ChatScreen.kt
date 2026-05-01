@@ -2,9 +2,14 @@ package com.aitunes.app.ui.screens
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
@@ -20,6 +25,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
@@ -32,25 +38,28 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.Send
 import androidx.compose.material.icons.rounded.Image
 import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.MoreVert
+import androidx.compose.material.icons.rounded.Psychology
 import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.material.icons.rounded.Storage
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TextField
+import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -61,37 +70,64 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import com.aitunes.app.domain.model.AiAssistant
 import com.aitunes.app.domain.model.ChatMessage
 import com.aitunes.app.domain.model.MessageSender
+import com.aitunes.app.domain.model.SectorId
+import com.aitunes.app.ui.chat.ChatViewModel
+import com.aitunes.app.ui.chat.IntelligencePhase
 import com.aitunes.app.ui.theme.OnSurfaceVariant
+import com.aitunes.app.ui.theme.TealAccent
 import com.aitunes.app.ui.theme.PureBlack
 import com.aitunes.app.ui.theme.SurfaceCard
 import com.aitunes.app.ui.theme.SurfaceCardElevated
-import kotlinx.coroutines.launch
 
 @Composable
 fun ChatScreen(
     assistant: AiAssistant,
-    onBackClick: () -> Unit
+    viewModel: ChatViewModel,
+    onBackClick: () -> Unit,
+    onOpenModelLibrary: () -> Unit
 ) {
-    val messages = remember { mutableStateListOf<ChatMessage>() }
+    val messages by viewModel.messages.collectAsState()
+    val needsModel by viewModel.needsActiveModel.collectAsState()
+    val sectorRequired by viewModel.sectorModelRequired.collectAsState()
+    val ragMs by viewModel.ragDurationMs.collectAsState()
+    val genMs by viewModel.genDurationMs.collectAsState()
+    val intelPhase by viewModel.intelligencePhase.collectAsState()
+    val modelLabel by viewModel.intelligenceModelLabel.collectAsState()
+    val longTermBrain by viewModel.longTermMemoryAccess.collectAsState()
+    val nativeEngineDiag by viewModel.nativeEngineDiagnostics.collectAsState()
+
     var inputText by remember { mutableStateOf("") }
     var isRecording by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
-    val scope = rememberCoroutineScope()
 
-    LaunchedEffect(Unit) {
-        messages.add(
-            ChatMessage(
-                id = "welcome",
-                content = "Hola, soy tu asistente de ${assistant.name}. ¿En qué puedo ayudarte hoy?",
-                sender = MessageSender.AI,
-                accentColor = assistant.accentColor
-            )
-        )
+    // Mensaje de bienvenida al instante; GGUF solo tras ~750 ms para que la UI reciba toques primero.
+    LaunchedEffect(assistant.id) {
+        viewModel.seedWelcomeIfEmpty(assistant)
+        viewModel.refreshModelRequirement(initialDelayMs = 750L)
+    }
+
+    val lifecycleOwner = LocalLifecycleOwner.current
+    var skipResumeRefresh by remember(assistant.id) { mutableStateOf(true) }
+    DisposableEffect(lifecycleOwner, viewModel, assistant.id) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                if (skipResumeRefresh) {
+                    skipResumeRefresh = false
+                } else {
+                    viewModel.refreshModelRequirement()
+                }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
     LaunchedEffect(messages.size) {
@@ -106,10 +142,48 @@ fun ChatScreen(
             .background(PureBlack)
             .imePadding()
     ) {
+        IntelligenceStatusBar(
+            sector = viewModel.sector,
+            modelLabel = modelLabel,
+            phase = intelPhase,
+            ragMs = ragMs,
+            genMs = genMs,
+            longTermBrain = longTermBrain,
+            accent = assistant.accentColor,
+            engineDiagnostic = nativeEngineDiag
+        )
+
         ChatHeader(
             assistant = assistant,
-            onBackClick = onBackClick
+            onBackClick = onBackClick,
+            onOpenModelLibrary = onOpenModelLibrary
         )
+
+        AnimatedVisibility(visible = needsModel || sectorRequired != null) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(TealAccent.copy(alpha = 0.12f))
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = when (val req = sectorRequired) {
+                        null -> "Activa un modelo GGUF en la biblioteca para generar respuestas locales."
+                        else ->
+                            "Modelo requerido para ${viewModel.sector.displayLabel}: ${req.displayName} " +
+                                "(${req.quantLabel}). Descárgalo en la biblioteca."
+                    },
+                    fontSize = 12.sp,
+                    color = Color.White.copy(alpha = 0.9f),
+                    modifier = Modifier.weight(1f)
+                )
+                TextButton(onClick = onOpenModelLibrary) {
+                    Text("Biblioteca", color = TealAccent)
+                }
+            }
+        }
 
         LazyColumn(
             state = listState,
@@ -131,26 +205,13 @@ fun ChatScreen(
             onValueChange = { inputText = it },
             onSendClick = {
                 if (inputText.isNotBlank()) {
-                    messages.add(
-                        ChatMessage(
-                            id = System.currentTimeMillis().toString(),
-                            content = inputText,
-                            sender = MessageSender.USER,
-                            accentColor = assistant.accentColor
-                        )
-                    )
+                    val toSend = inputText
                     inputText = ""
-                    scope.launch {
-                        kotlinx.coroutines.delay(600)
-                        messages.add(
-                            ChatMessage(
-                                id = System.currentTimeMillis().toString() + "_ai",
-                                content = "Estoy procesando tu consulta sobre ${assistant.name}. Esto es una respuesta simulada mientras implementamos la conexión con el modelo.",
-                                sender = MessageSender.AI,
-                                accentColor = assistant.accentColor
-                            )
-                        )
-                    }
+                    viewModel.sendUserMessage(
+                        text = toSend,
+                        accentColor = assistant.accentColor,
+                        onNeedModelLibrary = onOpenModelLibrary
+                    )
                 }
             },
             onImageClick = { },
@@ -162,9 +223,98 @@ fun ChatScreen(
 }
 
 @Composable
+private fun IntelligenceStatusBar(
+    sector: SectorId,
+    modelLabel: String,
+    phase: IntelligencePhase,
+    ragMs: Long?,
+    genMs: Long?,
+    longTermBrain: Boolean,
+    accent: Color,
+    engineDiagnostic: String
+) {
+    val statusLine = when (phase) {
+        IntelligencePhase.Idle -> "Listo · ${sector.displayLabel}"
+        IntelligencePhase.SearchingSectorMemories ->
+            "Buscando en recuerdos de ${sector.displayLabel}..."
+        IntelligencePhase.Generating -> "Generando respuesta..."
+        IntelligencePhase.IndexingSemantic -> "Indexando hecho en capa semántica..."
+    }
+    val brainTransition = rememberInfiniteTransition(label = "brainPulse")
+    val brainAlpha by brainTransition.animateFloat(
+        initialValue = 0.35f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(900),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "brainAlpha"
+    )
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .statusBarsPadding()
+            .padding(horizontal = 12.dp, vertical = 6.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(SurfaceCard.copy(alpha = 0.92f))
+            .border(1.dp, Color.White.copy(alpha = 0.06f), RoundedCornerShape(12.dp))
+            .padding(horizontal = 10.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        Icon(
+            imageVector = Icons.Rounded.Psychology,
+            contentDescription = null,
+            tint = accent.copy(alpha = if (longTermBrain) brainAlpha else 0.45f),
+            modifier = Modifier.size(22.dp)
+        )
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = modelLabel.ifBlank { "Modelo sectorial" },
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = Color.White,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                text = statusLine,
+                fontSize = 11.sp,
+                color = OnSurfaceVariant.copy(alpha = 0.85f),
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+            val lat = buildString {
+                ragMs?.let { append("Memoria: ${it} ms") }
+                if (ragMs != null && genMs != null) append(" · ")
+                genMs?.let { append("Gen: ${it} ms") }
+            }
+            if (lat.isNotBlank()) {
+                Text(
+                    text = lat,
+                    fontSize = 10.sp,
+                    color = accent.copy(alpha = 0.75f)
+                )
+            }
+            if (engineDiagnostic.isNotBlank()) {
+                Text(
+                    text = engineDiagnostic,
+                    fontSize = 10.sp,
+                    color = Color(0xFFFFB74D),
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+    }
+}
+
+@Composable
 private fun ChatHeader(
     assistant: AiAssistant,
-    onBackClick: () -> Unit
+    onBackClick: () -> Unit,
+    onOpenModelLibrary: () -> Unit
 ) {
     val indexedSize = when (assistant.id) {
         "health"   -> "3.2 GB"
@@ -181,10 +331,9 @@ private fun ChatHeader(
         else       -> "—"
     }
 
-    Column(
+        Column(
         modifier = Modifier
             .fillMaxWidth()
-            .statusBarsPadding()
     ) {
         Row(
             modifier = Modifier
@@ -283,13 +432,14 @@ private fun ChatHeader(
                     .clip(CircleShape)
                     .clickable(
                         interactionSource = remember { MutableInteractionSource() },
-                        indication = null
-                    ) { },
+                        indication = null,
+                        onClick = onOpenModelLibrary
+                    ),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
                     imageVector = Icons.Rounded.MoreVert,
-                    contentDescription = "Options",
+                    contentDescription = "Biblioteca de modelos",
                     tint = OnSurfaceVariant,
                     modifier = Modifier.size(20.dp)
                 )
@@ -350,7 +500,10 @@ private fun ChatBubble(message: ChatMessage) {
                 )
         ) {
             Text(
-                text = message.content,
+                text = when {
+                    message.isLoading && message.content.isBlank() -> "Generando…"
+                    else -> message.content
+                },
                 fontSize = 15.sp,
                 color = if (isUser) Color.White else Color.White.copy(alpha = 0.9f),
                 lineHeight = 22.sp
@@ -430,41 +583,40 @@ private fun ChatInputBar(
                 )
             }
 
-            Box(
+            TextField(
+                value = value,
+                onValueChange = onValueChange,
                 modifier = Modifier
                     .weight(1f)
-                    .height(44.dp)
-                    .clip(RoundedCornerShape(22.dp))
-                    .background(SurfaceCard)
-                    .border(
-                        width = 1.dp,
-                        color = Color.White.copy(alpha = 0.08f),
-                        shape = RoundedCornerShape(22.dp)
-                    )
-                    .padding(horizontal = 16.dp),
-                contentAlignment = Alignment.CenterStart
-            ) {
-                if (value.isEmpty()) {
+                    .heightIn(min = 44.dp, max = 120.dp),
+                placeholder = {
                     Text(
                         text = "Escribe un mensaje...",
                         fontSize = 15.sp,
                         color = OnSurfaceVariant.copy(alpha = 0.6f)
                     )
-                }
-
-                BasicTextField(
-                    value = value,
-                    onValueChange = onValueChange,
-                    modifier = Modifier.fillMaxWidth(),
-                    textStyle = TextStyle(
-                        fontSize = 15.sp,
-                        color = Color.White,
-                        lineHeight = 20.sp
-                    ),
-                    singleLine = false,
-                    maxLines = 4
+                },
+                textStyle = TextStyle(
+                    fontSize = 15.sp,
+                    color = Color.White,
+                    lineHeight = 20.sp
+                ),
+                singleLine = false,
+                maxLines = 4,
+                shape = RoundedCornerShape(22.dp),
+                colors = TextFieldDefaults.colors(
+                    focusedContainerColor = SurfaceCard,
+                    unfocusedContainerColor = SurfaceCard,
+                    disabledContainerColor = SurfaceCard,
+                    focusedIndicatorColor = Color.Transparent,
+                    unfocusedIndicatorColor = Color.Transparent,
+                    disabledIndicatorColor = Color.Transparent,
+                    errorIndicatorColor = Color.Transparent,
+                    focusedTextColor = Color.White,
+                    unfocusedTextColor = Color.White,
+                    cursorColor = TealAccent
                 )
-            }
+            )
 
             if (hasText) {
                 Box(

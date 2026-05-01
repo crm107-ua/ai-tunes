@@ -8,3 +8,5 @@
 .externalNativeBuild
 .cxx
 local.properties
+models-cache/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf
+.kotlin/errors/errors-1777635115390.log
